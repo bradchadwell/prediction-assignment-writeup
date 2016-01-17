@@ -1,0 +1,122 @@
+---
+title: "Practical Machine Learning, Prediction Assignment Writeup"
+author: "B Chadwell"
+date: "January 2016"
+output: html_document
+---
+
+### Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+### Objective
+The goal of the project is to predict the manner in which they did the exercise--the "classe" variable in the training set--using any of the other variables to predict with.
+
+### Data
+Load data into R and prepare for analysis. Convert NA, Null, and #Div/0! values to NA. Use the `cache = TRUE` option for the initial data read to save time during code modifications and rerunning.
+
+```{r, cache = TRUE}
+setwd("~/Coursera/practical-machine-learning/prediction-assignment-writeup")
+
+# The training data for this project are available here:
+fileUrl<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+#download.file(fileUrl, destfile = "pml-training.csv", method = "curl")
+raw <- read.csv("pml-training.csv", header = TRUE, na.strings = c("", "NA", "NULL", "#DIV/0!"))
+
+# The test data are available here:
+fileUrl<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+#download.file(fileUrl, destfile = "pml-testing.csv", method = "curl")
+testcases <- read.csv("pml-testing.csv", header = TRUE, na.strings = c("", "NA", "NULL", "#DIV/0!"))
+```
+
+### Data Processing
+Remove columns with large number of NAs. Set threshold at 90% of observations: `r sum(colSums(is.na(raw))>0.9*length(raw))` variables have NA for >90% of observations.
+```{r}
+raw2 <- raw[,!colSums(is.na(raw))>0.9*length(raw)]
+sum(is.na(raw2))
+```
+This action removed *all* NA values.
+
+Remove "identifier" columns 1-7 (user name, time stamps, new/num window). These are unlikely to predict outcome from a single data row.
+```{r}
+raw3 <- raw2[,-(1:7)]
+```
+`r length(raw3)-1` variables remain for model predictors. All are numeric or integer. The outcome variable 'classe' is a 5 level factor.
+
+Check for near zero variance variables
+```{r}
+library(caret)
+inNZV <- nearZeroVar(raw3, saveMetrics = TRUE)
+raw4 <- raw3[,rownames(inNZV)[!inNZV$nzv]]
+```
+A total of `r sum(inNZV$nzv)` variables were removed. `r length(raw4)-1` variables remain for model predictors.
+
+Remove highly correlated variables
+```{r}
+matCorr <- cor(raw4[,1:52],raw4[,1:52]) #numeric only, so remove "classe" var
+hicorrvars <- findCorrelation(matCorr, names=TRUE)
+raw5 <- raw4[,-which(names(raw4) %in% hicorrvars)]
+
+```
+A total of `r length(hicorrvars)` variables were removed. `r length(raw5)-1` variables remain for model predictors.
+
+### Model Building
+Set seed for reproducibility. Split data into training and testing for cross validation. Used 70% for training and keep 30% to test model before making predictions on the assignment test data.
+```{r}
+library(caret)
+set.seed(777)
+inTrain <- createDataPartition(y=raw5$classe, p=0.7, list=FALSE)
+training <- raw5[inTrain,]; testing <- raw5[-inTrain,]
+```
+Training cases: `r dim(training)[1]`; Testing cases: `r dim(testing)[1]`
+
+#### Why I made this choice of model
+Random forests are usually one of the top two performing algorithms along with boosting in prediction contests. They are difficult to interpret, but often very accurate. (Random Forests course lecture)
+```{r}
+# Running code from course lecture was too slow on my machine; trControl options
+# speed execution
+
+#modFit <- train(classe ~ ., data=training, model="rf", prox=T)
+ctrl <- trainControl(allowParallel=T, method="cv", number=4)
+modFit <- train(classe ~ ., data=training, model="rf", trControl=ctrl)
+modFit # Display results 
+modFit$results$Accuracy[modFit$results$mtry][1] # Accuracy
+1-modFit$results$Accuracy[modFit$results$mtry][1] # Out of Sample Error
+```
+
+### Cross Validation
+Cross validation was performed in two manners:
+
+#### Cross validation within the caret train function itself  
+The train function itself performs cross validadtion. Based on the arguments applied, it used a 4 fold cross validation (method="cv", number=4). See Random Forest results in R output block above. Accuracy within the training data set is `r round(modFit$results$Accuracy[modFit$results$mtry][1],3)`, and out of sample error is `r round(1-modFit$results$Accuracy[modFit$results$mtry][1],3)`. 
+
+#### Cross validation with partitioned training data
+The testing portion of the partitioned data was used to estimate accuracy of the prediction model.
+```{r}
+pred <- predict(modFit, newdata=testing)
+testing$predRight <- pred==testing$classe
+# confusion matrix
+table(pred,testing$classe)
+
+accuracy <- sum(pred == testing$classe) / length(pred)
+accuracy #0.9928632 for model w/out high corr variables removed
+out_of_sample_error <- 1 - accuracy
+out_of_sample_error #0.007136788 for model without high correlation variables removed
+```
+The out of sample error for the model was `r round(out_of_sample_error,3)` on the partitioned training data.
+
+### Predictions
+Used prediction model to predict 20 different test cases.
+```{r}
+prediction <- predict(modFit, newdata=testcases)
+prediction # B A B A A E D B A A B C B A E E A B B B; Levels: A B C D E
+```
+Submitted these to the course grader. All 20 were correct.
+
+### Conclusion
+The random forest approach for building a prediction model was effective for this data set. I made this choice of model because random forests are one of the top two performing algorithms and are often very accurate. This was the case with 100% of the 20 test cases being predicted correctly.
+
+The out of sample error for the model was `r round(out_of_sample_error,3)` on the partitioned training data.
+
+The high prediction accuracy of the model suggests the model may be overtrained. It would be interesting to test the model by replicating the experiment with a new set of test subjects.
